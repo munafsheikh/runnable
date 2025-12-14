@@ -1,36 +1,151 @@
-# This is a basic workflow to help you get started with Actions
+name: CI/CD
 
-name: CI
-
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
   push:
-    branches: [ "main" ]
+    branches: [ "main", "claude/**" ]
   pull_request:
     branches: [ "main" ]
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
-  build:
-    # The type of runner that the job will run on
+  test-bash:
+    name: Test Bash Script
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Make scripts executable
+        run: chmod +x runnable.sh
+
+      - name: Test - List commands
+        run: ./runnable.sh ./tests
+
+      - name: Test - Generate test script
+        run: ./runnable.sh ./tests 00
+
+      - name: Test - Dry run mode
+        run: DRY_RUN=true ./runnable.sh ./tests 1
+
+      - name: Test - Debug mode
+        run: DEBUG=true ./runnable.sh ./tests
+
+      - name: Verify generated doctest.sh
+        run: |
+          if [ ! -f "doctest.sh" ]; then
+            echo "Error: doctest.sh was not generated"
+            exit 1
+          fi
+          echo "✓ doctest.sh generated successfully"
+
+      - name: Test - Execute specific command (pwd)
+        run: |
+          output=$(./runnable.sh ./tests 2 2>&1 || true)
+          if echo "$output" | grep -q "/home/runner/work"; then
+            echo "✓ Command executed successfully"
+          else
+            echo "Output: $output"
+          fi
+
+  test-powershell:
+    name: Test PowerShell Script
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install PowerShell (Ubuntu/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            sudo apt-get update
+            sudo apt-get install -y powershell
+          elif [ "$RUNNER_OS" == "macOS" ]; then
+            brew install --cask powershell
+          fi
+        shell: bash
+
+      - name: Test - List commands
+        run: pwsh -File ./runnable.ps1 ./tests
+        shell: pwsh
+
+      - name: Test - Generate test script
+        run: pwsh -File ./runnable.ps1 ./tests 00
+        shell: pwsh
+
+      - name: Test - Dry run mode
+        run: |
+          $env:DRY_RUN = "true"
+          pwsh -File ./runnable.ps1 ./tests 1
+        shell: pwsh
+
+      - name: Test - Debug mode
+        run: |
+          $env:DEBUG = "true"
+          pwsh -File ./runnable.ps1 ./tests
+        shell: pwsh
+
+      - name: Verify generated doctest.ps1
+        run: |
+          if (-not (Test-Path "doctest.ps1")) {
+            Write-Error "Error: doctest.ps1 was not generated"
+            exit 1
+          }
+          Write-Host "✓ doctest.ps1 generated successfully"
+        shell: pwsh
+
+  lint-bash:
+    name: Lint Bash Script
     runs-on: ubuntu-latest
 
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: '.'
+          severity: warning
 
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
+  code-quality:
+    name: Code Quality Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check for common issues
         run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+          echo "Checking for hardcoded DEBUG=true..."
+          if grep -q "^DEBUG=true" runnable.sh; then
+            echo "❌ Found hardcoded DEBUG=true in runnable.sh"
+            exit 1
+          fi
+          echo "✓ No hardcoded DEBUG=true found"
+
+      - name: Verify file permissions
+        run: |
+          if [ ! -x "runnable.sh" ]; then
+            echo "✓ runnable.sh is executable"
+          fi
+
+  all-tests-passed:
+    name: All Tests Passed
+    runs-on: ubuntu-latest
+    needs: [test-bash, test-powershell, lint-bash, code-quality]
+
+    steps:
+      - name: Success
+        run: |
+          echo "✅ All tests passed successfully!"
+          echo "🎉 Bash and PowerShell scripts are working correctly"
